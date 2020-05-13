@@ -1,129 +1,125 @@
 #include <stdio.h>
-#include <iostream>
 
-using namespace std;
+#define MEMORY_SIZE 256
 
-const int MAX_POOLS = 1000;
-const long BUF_SIZE = 104888320;
+#define MEMORY_ALLOCATION_ERROR nullptr
+#define MEMORY_CLEANING_ERROR 0
 
-static char ALLBUF[BUF_SIZE];
-static unsigned long AVAIBLE = BUF_SIZE;
-static char* pools[MAX_POOLS];
-static unsigned int POOLS_COUNT = 1;
-static unsigned int pools_size[MAX_POOLS];
+int memorySize = 256;
+char virtualMemory[MEMORY_SIZE];
 
-static char* blocks[MAX_POOLS];
-static unsigned int BLOCKS_COUNT = 0;
-static unsigned int block_size[MAX_POOLS];
-static unsigned int RIGHT_BLOCK;
+typedef struct memoryBlock {
+	memoryBlock* next;
+	int blockSize;
+	bool isAvailable;
+	int remainingBytes;
+	void* memoryPointer;
+	void* old;
+};
 
-#define BLOCK_NOT_FOUND -1
+memoryBlock memoryHead;
 
-
-
-char* __malloc(unsigned long Size) {
-    unsigned long int i, k;
-    char* p;
-
-    if (Size > AVAIBLE) {
-        return nullptr;
-    }
-
-    p = 0;
-
-    for (i = 0; i < POOLS_COUNT; ++i)
-        if (Size <= pools_size[i]) {
-            p = pools[i];
-            k = i;
-            break;
-        }
-
-    if (!p) {
-        return nullptr;
-    }
-
-    blocks[BLOCKS_COUNT] = p;
-    block_size[BLOCKS_COUNT] = Size;
-    ++BLOCKS_COUNT;
-    ++RIGHT_BLOCK;
-    pools[k] = (char*)(p + Size + 1);
-    pools_size[k] = pools_size[k] - Size;
-
-    AVAIBLE -= Size;
-    return p;
+void __init() {
+	memoryHead.next = NULL;
+	memoryHead.blockSize = 0;
+	memoryHead.isAvailable = 1;
+	memoryHead.remainingBytes = MEMORY_SIZE;
+	memoryHead.memoryPointer = virtualMemory;
+	memoryHead.old = virtualMemory;
 }
 
-int __free(char* block) {
-    unsigned int i, k;
-    char* p = 0;
-    for (i = 0; i < RIGHT_BLOCK; ++i)
-        if (block == blocks[i])
-        {
-            p = blocks[i];
-            k = i;
-            break;
-        }
-    if (!p) {
-        return BLOCK_NOT_FOUND;
-    }
-
-    blocks[k] = 0;
-    --BLOCKS_COUNT;
-    pools[POOLS_COUNT] = block;
-    pools_size[POOLS_COUNT] = block_size[k];
-    ++POOLS_COUNT;
-    AVAIBLE += block_size[k];
-    return 0;
+void __svap(void* destinationBlock, void* sourceBlock, int size) {
+	for (int i = 0; i < size; i++) {
+		((char*)destinationBlock)[i] = ((char*)sourceBlock)[i];
+	}
 }
 
-int __defrag(void) {
-    unsigned int i, k;
-    char* p = ALLBUF;
-    char* t, * tmp;
+void* __malloc(size_t size) {
+	if (size < 0 || size > MEMORY_SIZE) {
+		return MEMORY_ALLOCATION_ERROR;
+	}
+	memoryBlock* temp = &memoryHead;
+	while (temp) {
+		if (temp->isAvailable) {
+			if (temp->remainingBytes > size) {
+				memorySize -= size;
+				temp->blockSize = size;
+				temp->isAvailable = 0;
+				temp->next = (temp)+sizeof(memoryBlock);
 
-    for (i = 0; i < RIGHT_BLOCK; ++i) {
-        t = blocks[i];
-        if (t == ALLBUF) {
-            p = (char*)(blocks[i] + block_size[i] + 1);
-            continue;
-        }
-        tmp = p;
-        for (k = 0, t = blocks[i]; k < block_size[i]; ++k)
-            *p++ = *t++;
-        blocks[i] = tmp;
-    }
-
-    POOLS_COUNT = 1;
-    pools[0] = p;
-    AVAIBLE = BUF_SIZE - (unsigned long)(p - ALLBUF);
-    pools_size[0] = AVAIBLE;
-    RIGHT_BLOCK = 0;
-    return 0;
+				memoryBlock* nextMemoryHead = temp->next;
+				nextMemoryHead->isAvailable = 1;
+				nextMemoryHead->remainingBytes = memorySize;
+				nextMemoryHead->memoryPointer = (&(temp->memoryPointer) + size);
+				nextMemoryHead->old = nextMemoryHead->memoryPointer;
+				nextMemoryHead->next = NULL;
+				return temp->memoryPointer;
+			}
+			return MEMORY_ALLOCATION_ERROR;
+		}
+		temp = temp->next;
+	}
+	return MEMORY_ALLOCATION_ERROR;
 }
 
-void getData() {
-    cout << "\tAvailable memory: "<< AVAIBLE << "of "<< BUF_SIZE << " bytes\n\tCount of blocks: " << BLOCKS_COUNT << endl << endl;
+void __getInfo() {
+	printf(" Available memory: %d\n", memorySize);
+	memoryBlock *head = &memoryHead;
+	while (head) {
+		printf("%x\t%d\t%d\t%d\n", head->memoryPointer, head->blockSize, head->isAvailable, head->remainingBytes);
+		head = head->next;
+	}
+}
+
+void __free(void* pointer) {
+	if (pointer != 0) {
+		memoryBlock* temp = &memoryHead;
+
+		while (temp->memoryPointer != pointer)  
+			temp = temp->next;
+
+		temp->isAvailable = 1;		           
+		memorySize += temp->blockSize;	
+		char *t = (char*)temp->memoryPointer;
+		for (int i = 0; i < temp->blockSize; i++, t++)
+			*t = 0;
+	}
+	else printf("Memory is not allocated to this pointer\n");
+}
+
+void __defrag() {
+	memoryBlock *t, *temp = &memoryHead;
+
+	while (temp) {
+		if (temp->isAvailable) {
+			t = temp->next;
+			while (t && t->isAvailable)
+				t = t->next;
+			if (t) {
+				__svap(temp->memoryPointer, t->memoryPointer, t->blockSize);
+				temp->isAvailable = 0;
+				temp->blockSize = t->blockSize;
+				t->isAvailable = 1;
+				t->remainingBytes = memorySize;
+				temp->old = t->old;
+				t->memoryPointer = &temp->memoryPointer + temp->blockSize;
+				temp->next = t;
+			}
+		}
+		temp = temp->next;
+	}
 }
 
 int main() {
-
-    pools[0] = ALLBUF;
-    pools_size[0] = AVAIBLE;
-
-    char* ptr0 = __malloc(11);
-    getData();
-    __free(ptr0);
-    char* ptr2 = __malloc(12);
-    getData();
-    __free(ptr2);
-    char* ptr4 = __malloc(9);
-    getData();
-    char* ptr5 = __malloc(7);
-    getData();
-
-    __defrag();
-    cout << "\nAfter defragmentation.\n";
-    getData();
-    getchar();
-    return 0;
+	__init();
+	char *ptr1 = (char*)__malloc(10);
+	char *ptr2 = (char*)__malloc(15);
+	char *ptr3 = (char*)__malloc(9);
+	char *ptr4 = (char*)__malloc(20);
+	__getInfo();
+	__free(ptr3);
+	__getInfo();
+	__defrag();
+	__getInfo();
+	return 0;
 }
